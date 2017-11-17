@@ -1,5 +1,5 @@
 from osim.env.run import RunEnv
-
+ 
 env = RunEnv(visualize=True, max_obstacles = 10)
 
 observation = env.reset()
