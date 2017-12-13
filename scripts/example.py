@@ -1,10 +1,14 @@
 # Derived from keras-rl
+# to run: python example.py --train --model sample
+import os
+os.environ['KERAS_BACKEND'] = 'tensorflow'
 import opensim as osim
 import numpy as np
 import sys
 
+from keras import backend as be
 from keras.models import Sequential, Model
-from keras.layers import Dense, Activation, Flatten, Input, concatenate
+from keras.layers import Dense, Activation, Flatten, Input, Lambda, concatenate
 from keras.optimizers import Adam
 
 import numpy as np
@@ -17,6 +21,7 @@ from osim.env import *
 from osim.http.client import Client
 
 from keras.optimizers import RMSprop
+from keras.layers.advanced_activations import LeakyReLU
 
 import argparse
 import math
@@ -33,23 +38,46 @@ args = parser.parse_args()
 
 # Load walking environment
 env = RunEnv(args.visualize)
-env.reset()
+env.reset(difficulty = 0, seed = None)
 
-nb_actions = env.action_space.shape[0]
+nb_actions = env.action_space.shape[0]#/2
 
 # Total number of steps in training
 nallsteps = args.steps
 
+## Preprocessing
+#def relativize(x):
+#	return be.concatenate([
+#		x[:,:,0],
+#		x[:,:,1:2] - x[:,:,18:19],
+#		x[:,:,3:21],
+#		x[:,:,22:23] - x[:,:,18:19],
+#		x[:,:,24:25] - x[:,:,18:19],
+#		x[:,:,26:27] - x[:,:,18:19],
+#		x[:,:,28:29] - x[:,:,18:19],
+#		x[:,:,30:31] - x[:,:,18:19],
+#		x[:,:,32:33] - x[:,:,18:19],
+#		x[:,:,34:35] - x[:,:,18:19],
+#		x[:,:,36:40],
+#	], axis=2)
+
+#relativize_layer = Lambda(relativize, input_shape=(1,) + env.observation_space.shape, output_shape=(41,))
+
+#print(env.observation_space.shape)
+#print((1,) + env.observation_space.shape)
+
 # Create networks for DDPG
 # Next, we build a very simple model.
+leak_const = 0.2
 actor = Sequential()
 actor.add(Flatten(input_shape=(1,) + env.observation_space.shape))
+#actor.add(relativize_layer)
 actor.add(Dense(32))
-actor.add(Activation('relu'))
+actor.add(LeakyReLU(alpha=leak_const))
 actor.add(Dense(32))
-actor.add(Activation('relu'))
+actor.add(LeakyReLU(alpha=leak_const))
 actor.add(Dense(32))
-actor.add(Activation('relu'))
+actor.add(LeakyReLU(alpha=leak_const))
 actor.add(Dense(nb_actions))
 actor.add(Activation('sigmoid'))
 print(actor.summary())
@@ -59,58 +87,32 @@ observation_input = Input(shape=(1,) + env.observation_space.shape, name='observ
 flattened_observation = Flatten()(observation_input)
 x = concatenate([action_input, flattened_observation])
 x = Dense(64)(x)
-x = Activation('relu')(x)
+x = LeakyReLU(alpha=leak_const)(x)
 x = Dense(64)(x)
-x = Activation('relu')(x)
+x = LeakyReLU(alpha=leak_const)(x)
 x = Dense(64)(x)
-x = Activation('relu')(x)
+x = LeakyReLU(alpha=leak_const)(x)
 x = Dense(1)(x)
 x = Activation('linear')(x)
 critic = Model(inputs=[action_input, observation_input], outputs=x)
 print(critic.summary())
 
 # Set up the agent for training
+
 memory = SequentialMemory(limit=100000, window_length=1)
 random_process = OrnsteinUhlenbeckProcess(theta=.15, mu=0., sigma=.2, size=env.noutput)
-agent = DDPGAgent(nb_actions=nb_actions, actor=actor, critic=critic, critic_action_input=action_input,
-                  memory=memory, nb_steps_warmup_critic=100, nb_steps_warmup_actor=100,
-                  random_process=random_process, gamma=.99, target_model_update=1e-3,
-                  delta_clip=1.)
-# agent = ContinuousDQNAgent(nb_actions=env.noutput, V_model=V_model, L_model=L_model, mu_model=mu_model,
-#                            memory=memory, nb_steps_warmup=1000, random_process=random_process,
-#                            gamma=.99, target_model_update=0.1)
+agent = DDPGAgent(nb_actions=nb_actions, actor=actor, critic=critic, critic_action_input=action_input, memory=memory, nb_steps_warmup_critic=100, nb_steps_warmup_actor=100, random_process=random_process, gamma=.99, target_model_update=1e-3, delta_clip=1.)
+
 agent.compile(Adam(lr=.001, clipnorm=1.), metrics=['mae'])
 
-# Okay, now it's time to learn something! We visualize the training here for show, but this
-# slows down training quite a lot. You can always safely abort the training prematurely using
-# Ctrl + C.
+#quit()
+
+# Learning
+
 if args.train:
     agent.fit(env, nb_steps=nallsteps, visualize=False, verbose=1, nb_max_episode_steps=env.timestep_limit, log_interval=10000)
     # After training is done, we save the final weights.
     agent.save_weights(args.model, overwrite=True)
-
-# If TEST and TOKEN, submit to crowdAI
-if not args.train and args.token:
-    agent.load_weights(args.model)
-    # Settings
-    remote_base = 'http://grader.crowdai.org:1729'
-    client = Client(remote_base)
-
-    # Create environment
-    observation = client.env_create(args.token)
-
-    # Run a single step
-    # The grader runs 3 simulations of at most 1000 steps each. We stop after the last one
-    while True:
-        v = np.array(observation).reshape((env.observation_space.shape[0]))
-        action = agent.forward(v)
-        [observation, reward, done, info] = client.env_step(action.tolist())
-        if done:
-            observation = client.env_reset()
-            if not observation:
-                break
-
-    client.submit()
 
 # If TEST and no TOKEN, run some test experiments
 if not args.train and not args.token:

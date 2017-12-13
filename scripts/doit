@@ -1,0 +1,5 @@
+#!/bin/sh
+
+echo hi
+sleep 10
+echo lol

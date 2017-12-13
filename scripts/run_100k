@@ -1,0 +1,3 @@
+#!/bin/sh 
+
+python example.py --train --model sample_100k --steps 100000
